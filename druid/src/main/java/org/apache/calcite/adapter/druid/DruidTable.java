@@ -38,6 +38,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterables;
 
 import org.joda.time.DateTime;
+import org.joda.time.DateTimeZone;
 import org.joda.time.Interval;
 
 import java.util.List;
@@ -51,7 +52,8 @@ public class DruidTable extends AbstractTable implements TranslatableTable {
 
   public static final String DEFAULT_TIMESTAMP_COLUMN = "__time";
   public static final Interval DEFAULT_INTERVAL =
-      new Interval(new DateTime("1900-01-01"), new DateTime("3000-01-01"));
+      new Interval(new DateTime("1900-01-01", DateTimeZone.UTC),
+              new DateTime("3000-01-01", DateTimeZone.UTC));
 
   final DruidSchema schema;
   final String dataSource;
