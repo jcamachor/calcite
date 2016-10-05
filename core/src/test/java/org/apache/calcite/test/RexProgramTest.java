@@ -879,6 +879,12 @@ public class RexProgramTest {
         case_(eq(bRef, cRef), dRef, trueLiteral, aRef, eq(cRef, dRef), eRef, cRef),
         "CASE(=(?0.b, ?0.c), ?0.d, ?0.a)");
 
+    // case: no simplification and or-and rewriting
+    checkSimplify(
+        case_(eq(aRef, literal1), cRef, eRef, eq(bRef, unknownLiteral), trueLiteral),
+        "OR(AND(=(?0.a, 1), ?0.c), AND(?0.e, =(?0.b, null), NOT(=(?0.a, 1))),"
+            + " AND(NOT(=(?0.a, 1)), NOT(?0.e)))");
+
     // case: singleton
     checkSimplify(case_(trueLiteral, aRef, eq(cRef, dRef), eRef, cRef), "?0.a");
 

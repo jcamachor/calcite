@@ -1625,12 +1625,12 @@ public class RexUtil {
       }
       return newOperands.get(newOperands.size() - 1);
     }
-  trueFalse:
     if (call.getType().getSqlTypeName() == SqlTypeName.BOOLEAN) {
       // Optimize CASE where every branch returns constant true or constant
       // false.
       final List<Pair<RexNode, RexNode>> pairs =
           casePairs(rexBuilder, newOperands);
+      RexNode result;
       // 1) Possible simplification if unknown is treated as false:
       //   CASE
       //   WHEN p1 THEN TRUE
@@ -1639,29 +1639,9 @@ public class RexUtil {
       //   END
       // can be rewritten to: (p1 or p2)
       if (unknownAsFalse) {
-        final List<RexNode> terms = new ArrayList<>();
-        int pos = 0;
-        for (; pos < pairs.size(); pos++) {
-          // True block
-          Pair<RexNode, RexNode> pair = pairs.get(pos);
-          if (!pair.getValue().isAlwaysTrue()) {
-            break;
-          }
-          terms.add(pair.getKey());
-        }
-        for (; pos < pairs.size(); pos++) {
-          // False block
-          Pair<RexNode, RexNode> pair = pairs.get(pos);
-          if (!pair.getValue().isAlwaysFalse() && !isNull(pair.getValue())) {
-            break;
-          }
-        }
-        if (pos == pairs.size()) {
-          final RexNode disjunction = composeDisjunction(rexBuilder, terms, false);
-          if (!call.getType().equals(disjunction.getType())) {
-            return rexBuilder.makeCast(call.getType(), disjunction);
-          }
-          return disjunction;
+        result = simplifyBooleanCase1(rexBuilder, call.getType(), pairs);
+        if (result != null) {
+          return result;
         }
       }
       // 2) Another simplification
@@ -1671,31 +1651,24 @@ public class RexUtil {
       //   WHEN p3 THEN TRUE
       //   ELSE FALSE
       //   END
+      // (p1 or (p3 and not(p2)))
       // if p1...pn cannot be nullable
-      for (Ord<Pair<RexNode, RexNode>> pair : Ord.zip(pairs)) {
-        if (pair.e.getKey().getType().isNullable()) {
-          break trueFalse;
-        }
-        if (!pair.e.getValue().isAlwaysTrue()
-            && !pair.e.getValue().isAlwaysFalse()
-            && (!unknownAsFalse || !isNull(pair.e.getValue()))) {
-          break trueFalse;
-        }
+      result = simplifyBooleanCase2(rexBuilder, call.getType(), pairs, unknownAsFalse);
+      if (result != null) {
+        return result;
       }
-      final List<RexNode> terms = new ArrayList<>();
-      final List<RexNode> notTerms = new ArrayList<>();
-      for (Ord<Pair<RexNode, RexNode>> pair : Ord.zip(pairs)) {
-        if (pair.e.getValue().isAlwaysTrue()) {
-          terms.add(andNot(rexBuilder, pair.e.getKey(), notTerms));
-        } else {
-          notTerms.add(pair.e.getKey());
-        }
+      // 3) Another simplification
+      //   CASE
+      //   WHEN p1 THEN x
+      //   WHEN p2 THEN y
+      //   ELSE TRUE
+      //   END
+      // (p1 and x) or (p2 and y and not(p1)) or (not(p1) and not(p2))
+      // if p1...pn cannot be nullable
+      result = simplifyBooleanCase3(rexBuilder, call.getType(), pairs);
+      if (result != null) {
+        return result;
       }
-      final RexNode disjunction = composeDisjunction(rexBuilder, terms, false);
-      if (!call.getType().equals(disjunction.getType())) {
-        return rexBuilder.makeCast(call.getType(), disjunction);
-      }
-      return disjunction;
     }
     if (newOperands.equals(operands)) {
       return call;
@@ -1715,6 +1688,89 @@ public class RexUtil {
     builder.add(
         Pair.of((RexNode) rexBuilder.makeLiteral(true), Util.last(operands)));
     return builder.build();
+  }
+
+  private static RexNode simplifyBooleanCase1(RexBuilder rexBuilder,
+      RelDataType type, List<Pair<RexNode, RexNode>> pairs) {
+    final List<RexNode> terms = new ArrayList<>();
+    int pos = 0;
+    for (; pos < pairs.size(); pos++) {
+      // True block
+      Pair<RexNode, RexNode> pair = pairs.get(pos);
+      if (!pair.getValue().isAlwaysTrue()) {
+        break;
+      }
+      terms.add(pair.getKey());
+    }
+    for (; pos < pairs.size(); pos++) {
+      // False block
+      Pair<RexNode, RexNode> pair = pairs.get(pos);
+      if (!pair.getValue().isAlwaysFalse() && !isNull(pair.getValue())) {
+        break;
+      }
+    }
+    if (pos == pairs.size()) {
+      final RexNode disjunction = composeDisjunction(rexBuilder, terms, false);
+      if (!type.equals(disjunction.getType())) {
+        return rexBuilder.makeCast(type, disjunction);
+      }
+      return disjunction;
+    }
+    return null;
+  }
+
+  private static RexNode simplifyBooleanCase2(RexBuilder rexBuilder,
+      RelDataType type, List<Pair<RexNode, RexNode>> pairs, boolean unknownAsFalse) {
+    for (Ord<Pair<RexNode, RexNode>> pair : Ord.zip(pairs)) {
+      if (pair.e.getKey().getType().isNullable()) {
+        return null;
+      }
+      if (!pair.e.getValue().isAlwaysTrue()
+          && !pair.e.getValue().isAlwaysFalse()
+          && (!unknownAsFalse || !isNull(pair.e.getValue()))) {
+        return null;
+      }
+    }
+    final List<RexNode> terms = new ArrayList<>();
+    final List<RexNode> notTerms = new ArrayList<>();
+    for (Ord<Pair<RexNode, RexNode>> pair : Ord.zip(pairs)) {
+      if (pair.e.getValue().isAlwaysTrue()) {
+        terms.add(andNot(rexBuilder, pair.e.getKey(), notTerms));
+      } else {
+        notTerms.add(pair.e.getKey());
+      }
+    }
+    final RexNode disjunction = composeDisjunction(rexBuilder, terms, false);
+    if (!type.equals(disjunction.getType())) {
+      return rexBuilder.makeCast(type, disjunction);
+    }
+    return disjunction;
+  }
+
+  private static RexNode simplifyBooleanCase3(RexBuilder rexBuilder,
+      RelDataType type, List<Pair<RexNode, RexNode>> pairs) {
+    for (Ord<Pair<RexNode, RexNode>> pair : Ord.zip(pairs)) {
+      if (pair.e.getKey().getType().isNullable()) {
+        return null;
+      }
+      if (pair.i == pairs.size() - 1 && !pair.e.getValue().isAlwaysTrue()) {
+        return null;
+      }
+    }
+    final List<RexNode> terms = new ArrayList<>();
+    final List<RexNode> notTerms = new ArrayList<>();
+    for (Ord<Pair<RexNode, RexNode>> pair : Ord.zip(pairs)) {
+      terms.add(
+          RexUtil.andNot(rexBuilder,
+              rexBuilder.makeCall(SqlStdOperatorTable.AND, pair.e.getKey(), pair.e.getValue()),
+              notTerms));
+      notTerms.add(pair.e.getKey());
+    }
+    final RexNode disjunction = composeDisjunction(rexBuilder, terms, false);
+    if (!type.equals(disjunction.getType())) {
+      return rexBuilder.makeCast(type, disjunction);
+    }
+    return disjunction;
   }
 
   public static RexNode simplifyAnd(RexBuilder rexBuilder, RexCall e,
