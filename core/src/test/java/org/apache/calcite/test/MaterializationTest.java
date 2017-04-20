@@ -1251,6 +1251,58 @@ public class MaterializationTest {
               + "  EnumerableTableScan(table=[[hr, m0]])"));
   }
 
+  @Test public void testJoinMaterializationUKFK1() {
+    checkMaterialize(
+      "select \"a\".\"empid\" \"deptno\" from\n"
+          + "(select * from \"emps\" where \"empid\" = 1) \"a\"\n"
+          + "join \"depts\" using (\"deptno\")"
+          + "join \"dependents\" using (\"empid\")",
+      "select \"a\".\"empid\" from \n"
+          + "(select * from \"emps\" where \"empid\" = 1) \"a\"\n"
+          + "join \"dependents\" using (\"empid\")\n",
+      JdbcTest.HR_MODEL,
+      CalciteAssert.checkResultContains(
+          "PLAN=EnumerableTableScan(table=[[hr, m0]])"));
+  }
+
+  @Test public void testJoinMaterializationUKFK2() {
+    checkMaterialize(
+      "select \"a\".\"empid\", \"a\".\"deptno\" from\n"
+          + "(select * from \"emps\" where \"empid\" = 1) \"a\"\n"
+          + "join \"depts\" using (\"deptno\")"
+          + "join \"dependents\" using (\"empid\")",
+      "select \"a\".\"empid\" from \n"
+          + "(select * from \"emps\" where \"empid\" = 1) \"a\"\n"
+          + "join \"dependents\" using (\"empid\")\n",
+      JdbcTest.HR_MODEL,
+      CalciteAssert.checkResultContains(
+          "EnumerableCalc(expr#0..1=[{inputs}], empid=[$t0])\n"
+              + "  EnumerableTableScan(table=[[hr, m0]])"));
+  }
+
+  @Test public void testJoinMaterializationUKFK3() {
+    checkNoMaterialize(
+      "select \"a\".\"empid\", \"a\".\"deptno\" from\n"
+          + "(select * from \"emps\" where \"empid\" = 1) \"a\"\n"
+          + "join \"depts\" using (\"deptno\")"
+          + "join \"dependents\" using (\"empid\")",
+      "select \"a\".\"name\" from \n"
+          + "(select * from \"emps\" where \"empid\" = 1) \"a\"\n"
+          + "join \"dependents\" using (\"empid\")\n",
+      JdbcTest.HR_MODEL);
+  }
+
+  @Test public void testJoinMaterializationUKFK4() {
+    checkMaterialize(
+      "select \"empid\" \"deptno\" from\n"
+          + "(select * from \"emps\" where \"empid\" = 1)\n"
+          + "join \"depts\" using (\"deptno\")",
+      "select \"empid\" from \"emps\" where \"empid\" = 1\n",
+      JdbcTest.HR_MODEL,
+      CalciteAssert.checkResultContains(
+          "PLAN=EnumerableTableScan(table=[[hr, m0]])"));
+  }
+
   @Test public void testSubQuery() {
     String q = "select \"empid\", \"deptno\", \"salary\" from \"emps\" e1\n"
         + "where \"empid\" = (\n"
